@@ -109,6 +109,28 @@ export default function App() {
     return {...v,total,pairs,rate,commission,bonus,finalTotal:commission+bonus};
   }).filter(r => hasText(`${r.name} ${r.phone}`, commissionSearch));
 
+  const commissionBalanceRows = vendors
+    .filter(v => commissionVendor === "Todos" || v.id === commissionVendor)
+    .map(v => {
+      const pendingSales = sales.filter(s => s.vendorId === v.id && inRange(s.date, commissionFilter) && !s.commissionPaymentId);
+      const pendingSalesTotal = pendingSales.reduce((a,s)=>a+s.total,0);
+      const pendingPairs = pendingSales.reduce((a,s)=>a+s.qty,0);
+      const pendingRate = rateFor(pendingSalesTotal);
+      const pendingCommission = Math.round(pendingSalesTotal * pendingRate);
+      const pendingBonus = bonusFor(pendingPairs);
+      const pending = pendingCommission + pendingBonus;
+      const paidPayments = commissionPayments.filter(p => p.vendorId === v.id && inRange(p.date, commissionFilter));
+      const paid = paidPayments.reduce((a,p)=>a+Number(p.totalPaid||0),0);
+      return {...v,pending,paid,historic:pending+paid,pendingSalesTotal,pendingPairs,pendingRate,pendingCommission,pendingBonus};
+    })
+    .filter(r => hasText(`${r.name} ${r.phone}`, commissionSearch));
+  const commissionSummary = {
+    pending: commissionBalanceRows.reduce((a,r)=>a+r.pending,0),
+    paid: commissionBalanceRows.reduce((a,r)=>a+r.paid,0),
+    vendorsWithBalance: commissionBalanceRows.filter(r=>r.pending>0).length,
+    historic: commissionBalanceRows.reduce((a,r)=>a+r.historic,0)
+  };
+
   const saleMatch = (s, f) => {
     const v = vendors.find(x => x.id === s.vendorId);
     const p = products.find(x => x.id === s.productId) || {};
@@ -261,6 +283,26 @@ export default function App() {
   }
   function printExpense(expense) { setPrintDoc({type:"expense", data:expense}); }
   function printNow() { setTimeout(()=>window.print(), 100); }
+  function csvValue(v) { return `"${String(v ?? "").replaceAll('"','""')}"`; }
+  function downloadCSV(filename, rows) {
+    const csv = rows.map(row => row.map(csvValue).join(";")).join("\n");
+    const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  function exportSalesCSV() {
+    downloadCSV("informe_ventas.csv", [["Comprobante","Fecha","Vendedor","Cliente","Producto","Talle","Cantidad","Total"], ...reportSales.map(s => { const v=vendors.find(x=>x.id===s.vendorId); return [s.number, showDate(s.date), v?.name||"", s.customer, `${s.productId} - ${s.productName}`, s.size, s.qty, s.total]; })]);
+  }
+  function exportExpensesCSV() {
+    downloadCSV("informe_gastos.csv", [["Comprobante","Fecha","Tipo","Descripcion","Monto"], ...reportExpenses.map(e => [e.number, showDate(e.date), e.type, e.description, e.amount])]);
+  }
+  function exportCommissionsCSV() {
+    downloadCSV("informe_comisiones.csv", [["Vendedor","Pendiente","Pagado","Historico"], ...commissionBalanceRows.map(r => [r.name, r.pending, r.paid, r.historic])]);
+  }
 
   const MenuButton = ({id, label}) => <button onClick={()=>setTab(id)} className={`w-full text-left px-4 py-3 rounded-xl font-bold ${tab === id ? "bg-purple-700 text-white" : "bg-zinc-100"}`}>{label}</button>;
   const SearchBox = ({value, onChange, placeholder}) => <div className="relative"><span className="absolute left-3 top-3 text-zinc-400">🔍</span><Inp className="pl-10" value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}/></div>;
@@ -296,7 +338,44 @@ export default function App() {
   }
 
   function ViewCommissions() {
-    return <Card><div className="p-5 space-y-4"><h3 className="text-2xl font-black">Comisiones y bonos</h3><div className="grid md:grid-cols-5 gap-2"><Inp type="date" value={commissionFilter.from} onChange={e=>setCommissionFilter({...commissionFilter,from:e.target.value})}/><Inp type="date" value={commissionFilter.to} onChange={e=>setCommissionFilter({...commissionFilter,to:e.target.value})}/><Sel value={commissionVendor} onChange={e=>setCommissionVendor(e.target.value)}><option>Todos</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</Sel><Sel value={commissionStatus} onChange={e=>setCommissionStatus(e.target.value)}><option>Pendiente</option><option>Pagado</option><option>Todos</option></Sel>{SearchBox({value:commissionSearch,onChange:setCommissionSearch,placeholder:"Buscar vendedor"})}</div><table className="w-full text-sm bg-white"><thead><tr className="bg-purple-100"><th className="p-2 text-left">Vendedor</th><th>Ventas</th><th>Pares</th><th>Comisión</th><th>Bono</th><th>Total</th><th>Estado / Pago</th></tr></thead><tbody>{reports.map(r=><tr key={r.id} className="border-b"><td className="p-2 font-bold">{r.name}</td><td>{gs(r.total)}</td><td>{r.pairs}</td><td>{Math.round(r.rate*100)}% = {gs(r.commission)}</td><td>{gs(r.bonus)}</td><td className="font-black">{gs(r.finalTotal)}</td><td>{r.finalTotal<=0?<span className="text-zinc-500 font-bold">Sin saldo</span>:commissionStatus==="Pagado"?<span className="text-green-700 font-bold">Pagado</span>:<Btn className="bg-purple-700 text-white" onClick={()=>registerCommission(r)}>Registrar pago</Btn>}</td></tr>)}</tbody></table><div className="border-t pt-3"><Btn className="border bg-white" onClick={()=>setShowCommissions(!showCommissions)}>{showCommissions ? "Ocultar historial de comisiones" : "Ver historial de comisiones pagadas / reimpresión"} ({commissionPayments.length})</Btn>{showCommissions && <div className="mt-3 space-y-2">{commissionPayments.length === 0 ? <p className="text-sm text-zinc-500">No hay pagos de comisiones registrados.</p> : commissionPayments.map(p=><div key={p.id} className="bg-zinc-100 rounded-xl p-3 grid md:grid-cols-[1fr_auto] gap-2 items-center"><p><b>{p.number}</b> · {showDate(p.date)} · {p.vendorName} · Periodo: {p.from || "Inicio"} al {p.to || "Hoy"} · <b>{gs(p.totalPaid)}</b></p><Btn className="border bg-white" onClick={()=>setPrintDoc({type:"commission",data:p})}>Imprimir comprobante</Btn></div>)}</div>}</div><div className="grid md:grid-cols-[1fr_1fr_auto] gap-2 pt-3 border-t"><Inp placeholder="Nombre vendedor" value={newVendor.name} onChange={e=>setNewVendor({...newVendor,name:e.target.value})}/><Inp placeholder="Teléfono" value={newVendor.phone} onChange={e=>setNewVendor({...newVendor,phone:e.target.value})}/><Btn className="bg-purple-700 text-white" onClick={addVendor}>Agregar vendedor</Btn></div></div></Card>;
+    return <Card><div className="p-5 space-y-5">
+      <h3 className="text-2xl font-black">Comisiones y bonos</h3>
+      <div className="grid md:grid-cols-4 gap-3">
+        <div className="bg-yellow-50 rounded-xl p-4 border"><p className="text-sm">Total pendiente</p><p className="text-2xl font-black">{gs(commissionSummary.pending)}</p></div>
+        <div className="bg-green-50 rounded-xl p-4 border"><p className="text-sm">Total pagado</p><p className="text-2xl font-black">{gs(commissionSummary.paid)}</p></div>
+        <div className="bg-purple-50 rounded-xl p-4 border"><p className="text-sm">Vendedores con saldo</p><p className="text-2xl font-black">{commissionSummary.vendorsWithBalance}</p></div>
+        <div className="bg-zinc-50 rounded-xl p-4 border"><p className="text-sm">Histórico filtrado</p><p className="text-2xl font-black">{gs(commissionSummary.historic)}</p></div>
+      </div>
+      <div className="grid md:grid-cols-5 gap-2">
+        <Inp type="date" value={commissionFilter.from} onChange={e=>setCommissionFilter({...commissionFilter,from:e.target.value})}/>
+        <Inp type="date" value={commissionFilter.to} onChange={e=>setCommissionFilter({...commissionFilter,to:e.target.value})}/>
+        <Sel value={commissionVendor} onChange={e=>setCommissionVendor(e.target.value)}><option>Todos</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</Sel>
+        <Sel value={commissionStatus} onChange={e=>setCommissionStatus(e.target.value)}><option>Pendiente</option><option>Pagado</option><option>Todos</option></Sel>
+        <SearchBox value={commissionSearch} onChange={setCommissionSearch} placeholder="Buscar vendedor"/>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Btn className={`${commissionStatus==="Todos"?"bg-purple-700 text-white":"border bg-white"}`} onClick={()=>setCommissionStatus("Todos")}>Todos</Btn>
+        <Btn className={`${commissionStatus==="Pendiente"?"bg-purple-700 text-white":"border bg-white"}`} onClick={()=>setCommissionStatus("Pendiente")}>Pendientes</Btn>
+        <Btn className={`${commissionStatus==="Pagado"?"bg-purple-700 text-white":"border bg-white"}`} onClick={()=>setCommissionStatus("Pagado")}>Pagados</Btn>
+        <Btn className="border bg-white" onClick={exportCommissionsCSV}>Exportar comisiones Excel</Btn>
+      </div>
+      <div className="rounded-xl border overflow-auto">
+        <table className="w-full text-sm bg-white">
+          <thead><tr className="bg-purple-100"><th className="p-2 text-left">Vendedor</th><th>Pendiente</th><th>Pagado</th><th>Histórico</th><th>Ventas pendientes</th><th>Pares</th><th>Acción</th></tr></thead>
+          <tbody>{commissionBalanceRows.map(r=><tr key={r.id} className="border-b"><td className="p-2 font-bold">{r.name}</td><td className="font-black text-yellow-700">{gs(r.pending)}</td><td className="text-green-700 font-bold">{gs(r.paid)}</td><td>{gs(r.historic)}</td><td>{gs(r.pendingSalesTotal)}</td><td>{r.pendingPairs}</td><td>{r.pending<=0?<span className="text-zinc-500 font-bold">Sin saldo</span>:<Btn className="bg-purple-700 text-white" onClick={()=>registerCommissionPayment(r)}>Registrar pago</Btn>}</td></tr>)}</tbody>
+        </table>
+      </div>
+      <p className="text-sm text-zinc-500">Una venta ya pagada no vuelve a entrar como comisión pendiente.</p>
+      <div className="border-t pt-3">
+        <Btn className="border bg-white" onClick={()=>setShowCommissions(!showCommissions)}>{showCommissions ? "Ocultar historial de comisiones" : "Ver historial de comisiones pagadas / reimpresión"} ({commissionPayments.length})</Btn>
+        {showCommissions && <div className="mt-3 space-y-2">{commissionPayments.length === 0 ? <p className="text-sm text-zinc-500">No hay pagos de comisiones registrados.</p> : commissionPayments.map(p=><div key={p.id} className="bg-zinc-100 rounded-xl p-3 grid md:grid-cols-[1fr_auto] gap-2 items-center"><p><b>{p.number}</b> · {showDate(p.date)} · {p.vendorName} · Periodo: {p.from || "Inicio"} al {p.to || "Hoy"} · <b>{gs(p.totalPaid)}</b></p><Btn className="border bg-white" onClick={()=>setPrintDoc({type:"commission",data:p})}>Imprimir comprobante</Btn></div>)}</div>}
+      </div>
+      <div className="grid md:grid-cols-[1fr_1fr_auto] gap-2 pt-3 border-t">
+        <Inp placeholder="Nombre vendedor" value={newVendor.name} onChange={e=>setNewVendor({...newVendor,name:e.target.value})}/>
+        <Inp placeholder="Teléfono" value={newVendor.phone} onChange={e=>setNewVendor({...newVendor,phone:e.target.value})}/>
+        <Btn className="bg-purple-700 text-white" onClick={addVendor}>Agregar vendedor</Btn>
+      </div>
+    </div></Card>;
   }
 
   function SaleFilters({value,onChange,showType=false}) {
@@ -311,7 +390,7 @@ export default function App() {
     const fc = profitSales.reduce((a,s)=>a+s.cost*s.qty,0);
     const fg = fs - fc;
     const fe = profitExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
-    return <Card><div className="p-5 space-y-4"><h3 className="text-2xl font-black">Informes</h3><div className="grid md:grid-cols-3 gap-3">{Box({title:"Ventas totales",value:gs(totals.total)})}{Box({title:"Pares vendidos",value:totals.pairs})}{Box({title:"Ganancia bruta",value:gs(totals.gross),sub:`${totals.grossMargin.toFixed(1)}%`})}{Box({title:"Costo mercadería",value:gs(totals.cost)})}{Box({title:"Comisiones + bonos",value:gs(totals.comm+totals.bon)})}{Box({title:"Gastos",value:gs(totals.exp)})}</div><div className="space-y-4"><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de ventas</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{SaleFilters({value:saleFilter,onChange:setSaleFilter})}{reportSales.map(s=>{const v=vendors.find(x=>x.id===s.vendorId);const gross=s.total-s.cost*s.qty;return <p key={s.id} className="border-b py-2 text-sm">{showDate(s.date)} · {v?.name} · {s.productId} T{s.size} · {gs(s.total)} · Gan. {gs(gross)}</p>})}</div></div><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de gastos</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{ExpenseFilters({value:expenseFilter,onChange:setExpenseFilter})}{reportExpenses.map(e=><p key={e.id} className="border-b py-2 text-sm">{showDate(e.date)} · {e.type} · {e.description} · {gs(e.amount)}</p>)}</div></div><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de rentabilidad</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{SaleFilters({value:profitFilter,onChange:setProfitFilter,showType:true})}<p><b>Ventas filtradas:</b> {gs(fs)}</p><p><b>Costo filtrado:</b> {gs(fc)}</p><p><b>Ganancia bruta filtrada:</b> {gs(fg)}</p><p><b>Gastos filtrados:</b> {gs(fe)}</p><p><b>Rentabilidad filtrada:</b> {gs(fg-fe)}</p></div></div></div><div className="bg-black text-white rounded-2xl p-5"><p className="text-sm text-zinc-300">Rentabilidad neta</p><p className="text-4xl font-black">{gs(totals.net)}</p><p>Margen neto: {totals.netMargin.toFixed(1)}%</p></div></div></Card>;
+    return <Card><div className="p-5 space-y-4"><h3 className="text-2xl font-black">Informes</h3><div className="flex flex-wrap gap-2"><Btn className="border bg-white" onClick={()=>window.print()}>Imprimir informe</Btn><Btn className="border bg-white" onClick={exportSalesCSV}>Exportar ventas Excel</Btn><Btn className="border bg-white" onClick={exportExpensesCSV}>Exportar gastos Excel</Btn></div><div className="grid md:grid-cols-3 gap-3">{Box({title:"Ventas totales",value:gs(totals.total)})}{Box({title:"Pares vendidos",value:totals.pairs})}{Box({title:"Ganancia bruta",value:gs(totals.gross),sub:`${totals.grossMargin.toFixed(1)}%`})}{Box({title:"Costo mercadería",value:gs(totals.cost)})}{Box({title:"Comisiones + bonos",value:gs(totals.comm+totals.bon)})}{Box({title:"Gastos",value:gs(totals.exp)})}</div><div className="space-y-4"><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de ventas</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{SaleFilters({value:saleFilter,onChange:setSaleFilter})}{reportSales.map(s=>{const v=vendors.find(x=>x.id===s.vendorId);const gross=s.total-s.cost*s.qty;return <p key={s.id} className="border-b py-2 text-sm">{showDate(s.date)} · {v?.name} · {s.productId} T{s.size} · {gs(s.total)} · Gan. {gs(gross)}</p>})}</div></div><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de gastos</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{ExpenseFilters({value:expenseFilter,onChange:setExpenseFilter})}{reportExpenses.map(e=><p key={e.id} className="border-b py-2 text-sm">{showDate(e.date)} · {e.type} · {e.description} · {gs(e.amount)}</p>)}</div></div><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de rentabilidad</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{SaleFilters({value:profitFilter,onChange:setProfitFilter,showType:true})}<p><b>Ventas filtradas:</b> {gs(fs)}</p><p><b>Costo filtrado:</b> {gs(fc)}</p><p><b>Ganancia bruta filtrada:</b> {gs(fg)}</p><p><b>Gastos filtrados:</b> {gs(fe)}</p><p><b>Rentabilidad filtrada:</b> {gs(fg-fe)}</p></div></div></div><div className="bg-black text-white rounded-2xl p-5"><p className="text-sm text-zinc-300">Rentabilidad neta</p><p className="text-4xl font-black">{gs(totals.net)}</p><p>Margen neto: {totals.netMargin.toFixed(1)}%</p></div></div></Card>;
   }
 
   function ViewConfig() {
