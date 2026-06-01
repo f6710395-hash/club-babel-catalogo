@@ -300,6 +300,31 @@ export default function App() {
   function exportExpensesCSV() {
     downloadCSV("informe_gastos.csv", [["Comprobante","Fecha","Tipo","Descripcion","Monto"], ...reportExpenses.map(e => [e.number, showDate(e.date), e.type, e.description, e.amount])]);
   }
+  function exportProfitCSV() {
+    const fs = profitSales.reduce((a,s)=>a+s.total,0);
+    const fc = profitSales.reduce((a,s)=>a+s.cost*s.qty,0);
+    const fg = fs - fc;
+    const fe = profitExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
+    downloadCSV("informe_rentabilidad.csv", [["Concepto","Monto"],["Ventas filtradas",fs],["Costo filtrado",fc],["Ganancia bruta filtrada",fg],["Gastos filtrados",fe],["Rentabilidad filtrada",fg-fe]]);
+  }
+  function printReport(type) {
+    if (type === "sales") {
+      const total = reportSales.reduce((a,s)=>a+s.total,0);
+      const profit = reportSales.reduce((a,s)=>a+(s.total-s.cost*s.qty),0);
+      setPrintDoc({type:"reportSales", data:{title:"Informe de ventas", rows:reportSales, total, profit, count:reportSales.length}});
+    }
+    if (type === "expenses") {
+      const total = reportExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
+      setPrintDoc({type:"reportExpenses", data:{title:"Informe de gastos", rows:reportExpenses, total, count:reportExpenses.length}});
+    }
+    if (type === "profit") {
+      const fs = profitSales.reduce((a,s)=>a+s.total,0);
+      const fc = profitSales.reduce((a,s)=>a+s.cost*s.qty,0);
+      const fg = fs - fc;
+      const fe = profitExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
+      setPrintDoc({type:"reportProfit", data:{title:"Informe de rentabilidad", sales:fs, cost:fc, gross:fg, expenses:fe, net:fg-fe}});
+    }
+  }
   function exportCommissionsCSV() {
     downloadCSV("informe_comisiones.csv", [["Vendedor","Pendiente","Pagado","Historico"], ...commissionBalanceRows.map(r => [r.name, r.pending, r.paid, r.historic])]);
   }
@@ -362,7 +387,7 @@ export default function App() {
       <div className="rounded-xl border overflow-auto">
         <table className="w-full text-sm bg-white">
           <thead><tr className="bg-purple-100"><th className="p-2 text-left">Vendedor</th><th>Pendiente</th><th>Pagado</th><th>Histórico</th><th>Ventas pendientes</th><th>Pares</th><th>Acción</th></tr></thead>
-          <tbody>{commissionBalanceRows.map(r=><tr key={r.id} className="border-b"><td className="p-2 font-bold">{r.name}</td><td className="font-black text-yellow-700">{gs(r.pending)}</td><td className="text-green-700 font-bold">{gs(r.paid)}</td><td>{gs(r.historic)}</td><td>{gs(r.pendingSalesTotal)}</td><td>{r.pendingPairs}</td><td>{r.pending<=0?<span className="text-zinc-500 font-bold">Sin saldo</span>:<Btn className="bg-purple-700 text-white" onClick={()=>registerCommissionPayment(r)}>Registrar pago</Btn>}</td></tr>)}</tbody>
+          <tbody>{commissionBalanceRows.map(r=><tr key={r.id} className="border-b"><td className="p-2 font-bold">{r.name}</td><td className="font-black text-yellow-700">{gs(r.pending)}</td><td className="text-green-700 font-bold">{gs(r.paid)}</td><td>{gs(r.historic)}</td><td>{gs(r.pendingSalesTotal)}</td><td>{r.pendingPairs}</td><td>{r.pending<=0?<span className="text-zinc-500 font-bold">Sin saldo</span>:<Btn className="bg-purple-700 text-white" onClick={()=>registerCommission(r)}>Registrar pago</Btn>}</td></tr>)}</tbody>
         </table>
       </div>
       <p className="text-sm text-zinc-500">Una venta ya pagada no vuelve a entrar como comisión pendiente.</p>
@@ -390,7 +415,47 @@ export default function App() {
     const fc = profitSales.reduce((a,s)=>a+s.cost*s.qty,0);
     const fg = fs - fc;
     const fe = profitExpenses.reduce((a,e)=>a+Number(e.amount||0),0);
-    return <Card><div className="p-5 space-y-4"><h3 className="text-2xl font-black">Informes</h3><div className="flex flex-wrap gap-2"><Btn className="border bg-white" onClick={()=>window.print()}>Imprimir informe</Btn><Btn className="border bg-white" onClick={exportSalesCSV}>Exportar ventas Excel</Btn><Btn className="border bg-white" onClick={exportExpensesCSV}>Exportar gastos Excel</Btn></div><div className="grid md:grid-cols-3 gap-3">{Box({title:"Ventas totales",value:gs(totals.total)})}{Box({title:"Pares vendidos",value:totals.pairs})}{Box({title:"Ganancia bruta",value:gs(totals.gross),sub:`${totals.grossMargin.toFixed(1)}%`})}{Box({title:"Costo mercadería",value:gs(totals.cost)})}{Box({title:"Comisiones + bonos",value:gs(totals.comm+totals.bon)})}{Box({title:"Gastos",value:gs(totals.exp)})}</div><div className="space-y-4"><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de ventas</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{SaleFilters({value:saleFilter,onChange:setSaleFilter})}{reportSales.map(s=>{const v=vendors.find(x=>x.id===s.vendorId);const gross=s.total-s.cost*s.qty;return <p key={s.id} className="border-b py-2 text-sm">{showDate(s.date)} · {v?.name} · {s.productId} T{s.size} · {gs(s.total)} · Gan. {gs(gross)}</p>})}</div></div><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de gastos</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{ExpenseFilters({value:expenseFilter,onChange:setExpenseFilter})}{reportExpenses.map(e=><p key={e.id} className="border-b py-2 text-sm">{showDate(e.date)} · {e.type} · {e.description} · {gs(e.amount)}</p>)}</div></div><div className="bg-white rounded-xl border overflow-hidden"><div className="p-3 font-black bg-zinc-50">Informe de rentabilidad</div><div className="p-3 space-y-3 max-h-96 overflow-auto">{SaleFilters({value:profitFilter,onChange:setProfitFilter,showType:true})}<p><b>Ventas filtradas:</b> {gs(fs)}</p><p><b>Costo filtrado:</b> {gs(fc)}</p><p><b>Ganancia bruta filtrada:</b> {gs(fg)}</p><p><b>Gastos filtrados:</b> {gs(fe)}</p><p><b>Rentabilidad filtrada:</b> {gs(fg-fe)}</p></div></div></div><div className="bg-black text-white rounded-2xl p-5"><p className="text-sm text-zinc-300">Rentabilidad neta</p><p className="text-4xl font-black">{gs(totals.net)}</p><p>Margen neto: {totals.netMargin.toFixed(1)}%</p></div></div></Card>;
+    return <Card><div className="p-5 space-y-4"><h3 className="text-2xl font-black">Informes</h3>
+      <div className="grid md:grid-cols-3 gap-3">
+        {Box({title:"Ventas totales",value:gs(totals.total)})}
+        {Box({title:"Pares vendidos",value:totals.pairs})}
+        {Box({title:"Ganancia bruta",value:gs(totals.gross),sub:`${totals.grossMargin.toFixed(1)}%`})}
+        {Box({title:"Costo mercadería",value:gs(totals.cost)})}
+        {Box({title:"Comisiones + bonos",value:gs(totals.comm+totals.bon)})}
+        {Box({title:"Gastos",value:gs(totals.exp)})}
+      </div>
+      <div className="space-y-4">
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="p-3 font-black bg-zinc-50">Informe de ventas</div>
+          <div className="p-3 space-y-3 max-h-96 overflow-auto">
+            {SaleFilters({value:saleFilter,onChange:setSaleFilter})}
+            {reportSales.map(s=>{const v=vendors.find(x=>x.id===s.vendorId);const gross=s.total-s.cost*s.qty;return <p key={s.id} className="border-b py-2 text-sm">{showDate(s.date)} · {v?.name} · {s.productId} T{s.size} · {gs(s.total)} · Gan. {gs(gross)}</p>})}
+            <div className="flex flex-wrap gap-2 pt-3 border-t"><Btn className="border bg-white" onClick={()=>printReport("sales")}>Imprimir informe de ventas</Btn><Btn className="border bg-white" onClick={exportSalesCSV}>Exportar ventas Excel</Btn></div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="p-3 font-black bg-zinc-50">Informe de gastos</div>
+          <div className="p-3 space-y-3 max-h-96 overflow-auto">
+            {ExpenseFilters({value:expenseFilter,onChange:setExpenseFilter})}
+            {reportExpenses.map(e=><p key={e.id} className="border-b py-2 text-sm">{showDate(e.date)} · {e.type} · {e.description} · {gs(e.amount)}</p>)}
+            <div className="flex flex-wrap gap-2 pt-3 border-t"><Btn className="border bg-white" onClick={()=>printReport("expenses")}>Imprimir informe de gastos</Btn><Btn className="border bg-white" onClick={exportExpensesCSV}>Exportar gastos Excel</Btn></div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="p-3 font-black bg-zinc-50">Informe de rentabilidad</div>
+          <div className="p-3 space-y-3 max-h-96 overflow-auto">
+            {SaleFilters({value:profitFilter,onChange:setProfitFilter,showType:true})}
+            <p><b>Ventas filtradas:</b> {gs(fs)}</p>
+            <p><b>Costo filtrado:</b> {gs(fc)}</p>
+            <p><b>Ganancia bruta filtrada:</b> {gs(fg)}</p>
+            <p><b>Gastos filtrados:</b> {gs(fe)}</p>
+            <p><b>Rentabilidad filtrada:</b> {gs(fg-fe)}</p>
+            <div className="flex flex-wrap gap-2 pt-3 border-t"><Btn className="border bg-white" onClick={()=>printReport("profit")}>Imprimir informe de rentabilidad</Btn><Btn className="border bg-white" onClick={exportProfitCSV}>Exportar rentabilidad Excel</Btn></div>
+          </div>
+        </div>
+      </div>
+      <div className="bg-black text-white rounded-2xl p-5"><p className="text-sm text-zinc-300">Rentabilidad neta</p><p className="text-4xl font-black">{gs(totals.net)}</p><p>Margen neto: {totals.netMargin.toFixed(1)}%</p></div>
+    </div></Card>;
   }
 
   function ViewConfig() {
@@ -406,7 +471,14 @@ export default function App() {
   function PrintModal() {
     if (!printDoc) return null;
     const d = printDoc.data;
-    return <div className="fixed inset-0 z-[999] bg-black/70 p-4 overflow-auto"><style>{`@media print{body *{visibility:hidden!important}.print-area,.print-area *{visibility:visible!important}.print-area{position:fixed!important;left:0!important;top:0!important;width:100%!important;max-width:none!important;margin:0!important;border-radius:0!important;box-shadow:none!important}.no-print{display:none!important}}`}</style><div className="no-print max-w-xl mx-auto mb-3 flex gap-2 justify-end"><Btn className="bg-purple-700 text-white" onClick={printNow}>Imprimir</Btn><Btn className="bg-white border" onClick={()=>setPrintDoc(null)}>Cerrar</Btn></div><div className="print-area bg-white max-w-xl mx-auto p-6 rounded-2xl shadow-xl text-black"><h1 className="text-3xl font-black text-purple-700">BABEL CALZADOS</h1>{printDoc.type === "sale" && <div><h2 className="text-xl font-black mt-2">Comprobante de venta</h2><p><b>N°:</b> {d.number}</p><p><b>Fecha:</b> {showDate(d.date)}</p><hr className="my-3"/><p><b>Vendedor:</b> {d.vendorName}</p><p><b>Cliente:</b> {d.customer}</p><p><b>Producto:</b> {d.productId} - {d.productName}</p><p><b>Talle:</b> {d.size}</p><p><b>Cantidad:</b> {d.qty}</p><h2 className="text-2xl font-black mt-3">Total: {gs(d.total)}</h2></div>}{printDoc.type === "expense" && <div><h2 className="text-xl font-black mt-2">Comprobante de gasto</h2><p><b>N°:</b> {d.number}</p><p><b>Fecha:</b> {showDate(d.date)}</p><hr className="my-3"/><p><b>Tipo:</b> {d.type}</p><p><b>Descripción:</b> {d.description}</p><h2 className="text-2xl font-black mt-3">Total gasto: {gs(d.amount)}</h2></div>}{printDoc.type === "commission" && <div><h2 className="text-xl font-black mt-2">Comprobante de pago de comisión</h2><p><b>N°:</b> {d.number}</p><p><b>Fecha de pago:</b> {showDate(d.date)}</p><p><b>Periodo:</b> {d.from || "Inicio"} al {d.to || "Hoy"}</p><hr className="my-3"/><p><b>Vendedor:</b> {d.vendorName}</p><p><b>Ventas liquidadas:</b> {gs(d.salesTotal)}</p><p><b>Pares vendidos:</b> {d.pairs}</p><p><b>Comisión:</b> {Math.round(d.rate*100)}% = {gs(d.commission)}</p><p><b>Bono:</b> {gs(d.bonus)}</p><h2 className="text-2xl font-black mt-3">Total pagado: {gs(d.totalPaid)}</h2></div>}<hr className="my-3"/><p className="text-xs text-zinc-500">Comprobante interno Club Babel.</p></div></div>;
+    return <div className="fixed inset-0 z-[999] bg-black/70 p-4 overflow-auto"><style>{`@media print{body *{visibility:hidden!important}.print-area,.print-area *{visibility:visible!important}.print-area{position:fixed!important;left:0!important;top:0!important;width:100%!important;max-width:none!important;margin:0!important;border-radius:0!important;box-shadow:none!important}.no-print{display:none!important}}`}</style><div className="no-print max-w-xl mx-auto mb-3 flex gap-2 justify-end"><Btn className="bg-purple-700 text-white" onClick={printNow}>Imprimir</Btn><Btn className="bg-white border" onClick={()=>setPrintDoc(null)}>Cerrar</Btn></div><div className="print-area bg-white max-w-3xl mx-auto p-6 rounded-2xl shadow-xl text-black"><h1 className="text-3xl font-black text-purple-700">BABEL CALZADOS</h1>
+      {printDoc.type === "sale" && <div><h2 className="text-xl font-black mt-2">Comprobante de venta</h2><p><b>N°:</b> {d.number}</p><p><b>Fecha:</b> {showDate(d.date)}</p><hr className="my-3"/><p><b>Vendedor:</b> {d.vendorName}</p><p><b>Cliente:</b> {d.customer}</p><p><b>Producto:</b> {d.productId} - {d.productName}</p><p><b>Talle:</b> {d.size}</p><p><b>Cantidad:</b> {d.qty}</p><h2 className="text-2xl font-black mt-3">Total: {gs(d.total)}</h2></div>}
+      {printDoc.type === "expense" && <div><h2 className="text-xl font-black mt-2">Comprobante de gasto</h2><p><b>N°:</b> {d.number}</p><p><b>Fecha:</b> {showDate(d.date)}</p><hr className="my-3"/><p><b>Tipo:</b> {d.type}</p><p><b>Descripción:</b> {d.description}</p><h2 className="text-2xl font-black mt-3">Total gasto: {gs(d.amount)}</h2></div>}
+      {printDoc.type === "commission" && <div><h2 className="text-xl font-black mt-2">Comprobante de pago de comisión</h2><p><b>N°:</b> {d.number}</p><p><b>Fecha de pago:</b> {showDate(d.date)}</p><p><b>Periodo:</b> {d.from || "Inicio"} al {d.to || "Hoy"}</p><hr className="my-3"/><p><b>Vendedor:</b> {d.vendorName}</p><p><b>Ventas liquidadas:</b> {gs(d.salesTotal)}</p><p><b>Pares vendidos:</b> {d.pairs}</p><p><b>Comisión:</b> {Math.round(d.rate*100)}% = {gs(d.commission)}</p><p><b>Bono:</b> {gs(d.bonus)}</p><h2 className="text-2xl font-black mt-3">Total pagado: {gs(d.totalPaid)}</h2></div>}
+      {printDoc.type === "reportSales" && <div><h2 className="text-xl font-black mt-2">Informe de ventas</h2><p><b>Fecha de emisión:</b> {showDate(today())}</p><p><b>Cantidad de ventas:</b> {d.count}</p><hr className="my-3"/>{d.rows.map(s=>{const v=vendors.find(x=>x.id===s.vendorId);return <p key={s.id} className="border-b py-1 text-sm">{s.number} · {showDate(s.date)} · {v?.name} · {s.customer} · {s.productId} T{s.size} · {gs(s.total)}</p>})}<h3 className="text-xl font-black mt-3">Total vendido: {gs(d.total)}</h3><p><b>Ganancia:</b> {gs(d.profit)}</p></div>}
+      {printDoc.type === "reportExpenses" && <div><h2 className="text-xl font-black mt-2">Informe de gastos</h2><p><b>Fecha de emisión:</b> {showDate(today())}</p><p><b>Cantidad de gastos:</b> {d.count}</p><hr className="my-3"/>{d.rows.map(e=><p key={e.id} className="border-b py-1 text-sm">{e.number} · {showDate(e.date)} · {e.type} · {e.description} · {gs(e.amount)}</p>)}<h3 className="text-xl font-black mt-3">Total gastos: {gs(d.total)}</h3></div>}
+      {printDoc.type === "reportProfit" && <div><h2 className="text-xl font-black mt-2">Informe de rentabilidad</h2><p><b>Fecha de emisión:</b> {showDate(today())}</p><hr className="my-3"/><p><b>Ventas filtradas:</b> {gs(d.sales)}</p><p><b>Costo filtrado:</b> {gs(d.cost)}</p><p><b>Ganancia bruta filtrada:</b> {gs(d.gross)}</p><p><b>Gastos filtrados:</b> {gs(d.expenses)}</p><h3 className="text-xl font-black mt-3">Rentabilidad filtrada: {gs(d.net)}</h3></div>}
+      <hr className="my-3"/><p className="text-xs text-zinc-500">Comprobante interno Club Babel.</p></div></div>;
   }
 
   const content = tab === "ventas" ? ViewSales() : tab === "gastos" ? ViewExpenses() : tab === "productos" ? ViewProducts() : tab === "stock" ? ViewCatalog() : tab === "comisiones" ? ViewCommissions() : tab === "informes" ? ViewReports() : tab === "config" ? ViewConfig() : ViewSales();
