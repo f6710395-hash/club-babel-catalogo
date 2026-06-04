@@ -55,9 +55,10 @@ export default function App() {
   const [tab, setTab] = useState("ventas");
   const [loginOpen, setLoginOpen] = useState(false);
   const [clicks, setClicks] = useState(0);
+  const [adminEmail, setAdminEmail] = useState(() => localStorage.getItem("clubBabelAdminEmail") || "");
   const [pass, setPass] = useState("");
-  const [newPass, setNewPass] = useState("");
-  const [savedPass, setSavedPass] = useState(() => localStorage.getItem("clubBabelPass") || "babel123");
+  const [session, setSession] = useState(null);
+  const [authStatus, setAuthStatus] = useState("");
 
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState("Todos");
@@ -101,22 +102,18 @@ export default function App() {
   const toDbMovement = m => ({ id:m.id, date:m.date, product_id:m.productId, product_name:m.productName, size:m.size, before_qty:m.before, after_qty:m.after, delta:m.delta, reason:m.reason, ref:m.ref || null });
   const saveSetting = async (key, value) => { if (supabase) await supabase.from("settings").upsert({key, value}); };
 
-  async function loadData({silent=false} = {}) {
+  async function loadData({silent=false, authSession=session} = {}) {
     if (!supabase) { setDbStatus("Modo local"); return; }
-    if (!silent) setDbStatus("Cargando datos...");
+    if (!silent) setDbStatus(authSession ? "Cargando datos de administrador..." : "Cargando catálogo...");
     try {
-      const [settingsRes, productsRes, stockRes, vendorsRes, salesRes, expensesRes, paymentsRes, movementsRes] = await Promise.all([
+      const [settingsRes, productsRes, stockRes] = await Promise.all([
         supabase.from("settings").select("key,value"),
         supabase.from("products").select("*").order("id", {ascending:true}),
-        supabase.from("product_stock").select("*"),
-        supabase.from("vendors").select("*").order("id", {ascending:true}),
-        supabase.from("sales").select("*").order("created_at", {ascending:false}),
-        supabase.from("expenses").select("*").order("created_at", {ascending:false}),
-        supabase.from("commission_payments").select("*").order("created_at", {ascending:false}),
-        supabase.from("stock_movements").select("*").order("created_at", {ascending:false}).limit(300)
+        supabase.from("product_stock").select("*")
       ]);
-      const error = [settingsRes, productsRes, stockRes, vendorsRes, salesRes, expensesRes, paymentsRes, movementsRes].find(r => r.error)?.error;
-      if (error) throw error;
+      const publicError = [settingsRes, productsRes, stockRes].find(r => r.error)?.error;
+      if (publicError) throw publicError;
+
       const settingsMap = Object.fromEntries((settingsRes.data || []).map(x => [x.key, x.value]));
       const loadedSizes = Array.isArray(settingsMap.sizes) ? settingsMap.sizes : BASE_SIZES;
       setSizes(loadedSizes);
@@ -125,18 +122,35 @@ export default function App() {
       if (Array.isArray(settingsMap.expenseTypes)) setExpenseTypes(settingsMap.expenseTypes);
       if (Array.isArray(settingsMap.commissionRules)) setCommissionRules(settingsMap.commissionRules);
       if (Array.isArray(settingsMap.bonusRules)) setBonusRules(settingsMap.bonusRules);
+
       const stockMap = {};
       (stockRes.data || []).forEach(row => {
         if (!stockMap[row.product_id]) stockMap[row.product_id] = {};
         stockMap[row.product_id][row.size] = Number(row.quantity || 0);
       });
       setProducts((productsRes.data || []).map(p => ({ id:p.id, active:p.active !== false, name:p.name, category:p.category || "", price:Number(p.price || 0), cost:Number(p.cost || 0), horma:p.horma || "", image:p.image || "", stockBySize:{...makeStock(loadedSizes), ...(stockMap[p.id] || {})} })));
+
+      if (!authSession) {
+        setDbStatus("Catálogo público conectado a Supabase");
+        return;
+      }
+
+      const [vendorsRes, salesRes, expensesRes, paymentsRes, movementsRes] = await Promise.all([
+        supabase.from("vendors").select("*").order("id", {ascending:true}),
+        supabase.from("sales").select("*").order("created_at", {ascending:false}),
+        supabase.from("expenses").select("*").order("created_at", {ascending:false}),
+        supabase.from("commission_payments").select("*").order("created_at", {ascending:false}),
+        supabase.from("stock_movements").select("*").order("created_at", {ascending:false}).limit(300)
+      ]);
+      const privateError = [vendorsRes, salesRes, expensesRes, paymentsRes, movementsRes].find(r => r.error)?.error;
+      if (privateError) throw privateError;
+
       setVendors((vendorsRes.data || []).map(v => ({id:v.id, active:v.active !== false, name:v.name, phone:v.phone || ""})));
       setSales((salesRes.data || []).map(s => ({ id:s.id, number:s.number, date:s.date, vendorId:s.vendor_id, customer:s.customer, productId:s.product_id, productName:s.product_name, size:s.size, qty:Number(s.qty || 0), unitPrice:Number(s.unit_price || 0), cost:Number(s.cost || 0), total:Number(s.total || 0), commissionPaymentId:s.commission_payment_id, commissionPaymentNumber:s.commission_payment_number })));
       setExpenses((expensesRes.data || []).map(e => ({id:e.id, number:e.number, date:e.date, type:e.type, description:e.description, amount:Number(e.amount || 0)})));
       setCommissionPayments((paymentsRes.data || []).map(p => ({ id:p.id, number:p.number, date:p.date, from:p.from_date, to:p.to_date, vendorId:p.vendor_id, vendorName:p.vendor_name, salesTotal:Number(p.sales_total || 0), pairs:Number(p.pairs || 0), rate:Number(p.rate || 0), commission:Number(p.commission || 0), bonus:Number(p.bonus || 0), totalPaid:Number(p.total_paid || 0), status:p.status || "Pagado" })));
       setStockMovements((movementsRes.data || []).map(m => ({ id:m.id, date:m.date, productId:m.product_id, productName:m.product_name, size:m.size, before:Number(m.before_qty || 0), after:Number(m.after_qty || 0), delta:Number(m.delta || 0), reason:m.reason, ref:m.ref || "" })));
-      setDbStatus("Conectado a Supabase");
+      setDbStatus("Administrador conectado a Supabase");
     } catch (err) {
       console.error(err);
       setDbStatus("Error Supabase: " + (err.message || "ver consola"));
@@ -144,10 +158,33 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadData();
-    const timer = setInterval(() => loadData({silent:true}), 15000);
-    return () => clearInterval(timer);
+    if (!supabase) { setDbStatus("Modo local"); return; }
+    let active = true;
+    supabase.auth.getSession().then(({data}) => {
+      if (!active) return;
+      const current = data?.session || null;
+      setSession(current);
+      setAdmin(!!current);
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, current) => {
+      setSession(current);
+      setAdmin(!!current);
+      if (current) {
+        setLoginOpen(false);
+        setPass("");
+      }
+    });
+    return () => {
+      active = false;
+      authListener?.subscription?.unsubscribe?.();
+    };
   }, []);
+
+  useEffect(() => {
+    loadData({authSession: session});
+    const timer = setInterval(() => loadData({silent:true, authSession: session}), 15000);
+    return () => clearInterval(timer);
+  }, [session]);
 
   const LOW_STOCK_LIMIT = 2;
   const activeProducts = products.filter(p => p.active !== false);
@@ -237,15 +274,30 @@ export default function App() {
     setClicks(next);
     if (next >= 5) { setLoginOpen(true); setClicks(0); }
   }
-  function login() {
-    if (pass === savedPass) { setAdmin(true); setLoginOpen(false); setPass(""); }
-    else alert("Contraseña incorrecta");
+  async function login() {
+    if (!supabase) return alert("Supabase no está configurado");
+    const email = adminEmail.trim();
+    if (!email || !pass) return alert("Completa correo y contraseña");
+    setAuthStatus("Ingresando...");
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
+    if (error) {
+      setAuthStatus("");
+      return alert("No se pudo ingresar: " + error.message);
+    }
+    localStorage.setItem("clubBabelAdminEmail", email);
+    setSession(data.session);
+    setAdmin(true);
+    setLoginOpen(false);
+    setPass("");
+    setAuthStatus("");
+    loadData({authSession:data.session});
   }
-  function savePassword() {
-    if (newPass.length < 6) return alert("Mínimo 6 caracteres");
-    localStorage.setItem("clubBabelPass", newPass);
-    setSavedPass(newPass);
-    setNewPass("");
+  async function logout() {
+    if (supabase) await supabase.auth.signOut();
+    setSession(null);
+    setAdmin(false);
+    setLoginOpen(false);
+    setTab("ventas");
   }
   async function updateStock(productId, size, delta, reason = "Ajuste manual", ref = "") {
     const product = products.find(p => p.id === productId);
@@ -621,5 +673,5 @@ export default function App() {
 
   const content = tab === "ventas" ? ViewSales() : tab === "gastos" ? ViewExpenses() : tab === "productos" ? ViewProducts() : tab === "stock" ? ViewCatalog() : tab === "comisiones" ? ViewCommissions() : tab === "informes" ? ViewReports() : tab === "config" ? ViewConfig() : ViewSales();
 
-  return <div className="min-h-screen bg-zinc-100 text-zinc-950"><header className="bg-gradient-to-r from-black via-purple-950 to-purple-700 text-white"><div className="max-w-7xl mx-auto px-4 py-6"><div onClick={logoClick} className="inline-block bg-black/80 rounded-2xl px-5 py-3 shadow-xl border border-purple-400/40 cursor-default select-none"><p className="tracking-[0.4em] text-sm">CLUB</p><h1 className="text-5xl font-black text-purple-400 leading-none">BABEL</h1><p className="tracking-[0.35em] text-sm">CALZADOS</p></div><h2 className="text-3xl md:text-5xl font-black mt-5">Catálogo Oficial</h2><p className="text-lg mt-2 text-purple-100">Catálogo digital para mostrar modelos, precios, talles y disponibilidad.</p>{admin && <p className="mt-2 text-xs text-purple-100">Base de datos: {dbStatus}</p>}</div></header><main className="max-w-7xl mx-auto px-4 py-8">{loginOpen && !admin && <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"><Card className="w-full max-w-sm"><div className="p-5 space-y-4"><p className="font-black text-xl">🔒 Acceso administrador</p><Inp type="password" placeholder="Contraseña" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key === "Enter" && login()}/><div className="grid grid-cols-2 gap-2"><Btn className="border bg-white" onClick={()=>setLoginOpen(false)}>Cancelar</Btn><Btn className="bg-purple-700 text-white" onClick={login}>Ingresar</Btn></div></div></Card></div>}{admin ? <div className="grid lg:grid-cols-[260px_1fr] gap-6"><aside className="bg-white rounded-2xl p-4 shadow-md h-fit sticky top-4 space-y-2"><p className="font-black text-xl mb-3">Panel administrador</p><MenuButton id="ventas" label="Ventas"/><MenuButton id="gastos" label="Gastos"/><MenuButton id="productos" label="Productos"/><MenuButton id="stock" label="Stock / Catálogo"/><MenuButton id="comisiones" label="Comisiones"/><MenuButton id="informes" label="Informes"/><MenuButton id="config" label="Configuración"/><div className="border-t pt-3 mt-3 space-y-2"><p className="font-bold">Contraseña</p><Inp type="password" placeholder="Nueva contraseña" value={newPass} onChange={e=>setNewPass(e.target.value)}/><Btn className="border bg-white w-full" onClick={savePassword}>Guardar</Btn><Btn className="border bg-white w-full" onClick={()=>setAdmin(false)}>Salir</Btn></div></aside><section>{content}</section></div> : ViewCatalog()}</main>{PaymentModal()}{PrintModal()}<footer className="bg-black text-white mt-10 py-6 text-center"><p className="font-bold">BABEL CALZADOS</p><p className="text-sm text-zinc-400">Catálogo digital de productos</p></footer></div>;
+  return <div className="min-h-screen bg-zinc-100 text-zinc-950"><header className="bg-gradient-to-r from-black via-purple-950 to-purple-700 text-white"><div className="max-w-7xl mx-auto px-4 py-6"><div onClick={logoClick} className="inline-block bg-black/80 rounded-2xl px-5 py-3 shadow-xl border border-purple-400/40 cursor-default select-none"><p className="tracking-[0.4em] text-sm">CLUB</p><h1 className="text-5xl font-black text-purple-400 leading-none">BABEL</h1><p className="tracking-[0.35em] text-sm">CALZADOS</p></div><h2 className="text-3xl md:text-5xl font-black mt-5">Catálogo Oficial</h2><p className="text-lg mt-2 text-purple-100">Catálogo digital para mostrar modelos, precios, talles y disponibilidad.</p>{admin && <p className="mt-2 text-xs text-purple-100">Base de datos: {dbStatus}</p>}</div></header><main className="max-w-7xl mx-auto px-4 py-8">{loginOpen && !admin && <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"><Card className="w-full max-w-sm"><div className="p-5 space-y-4"><p className="font-black text-xl">🔒 Acceso administrador</p><Inp type="email" placeholder="Correo administrador" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} onKeyDown={e=>e.key === "Enter" && login()}/><Inp type="password" placeholder="Contraseña" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key === "Enter" && login()}/>{authStatus && <p className="text-sm text-purple-700 font-bold">{authStatus}</p>}<div className="grid grid-cols-2 gap-2"><Btn className="border bg-white" onClick={()=>setLoginOpen(false)}>Cancelar</Btn><Btn className="bg-purple-700 text-white" onClick={login}>Ingresar</Btn></div></div></Card></div>}{admin ? <div className="grid lg:grid-cols-[260px_1fr] gap-6"><aside className="bg-white rounded-2xl p-4 shadow-md h-fit sticky top-4 space-y-2"><p className="font-black text-xl mb-3">Panel administrador</p><MenuButton id="ventas" label="Ventas"/><MenuButton id="gastos" label="Gastos"/><MenuButton id="productos" label="Productos"/><MenuButton id="stock" label="Stock / Catálogo"/><MenuButton id="comisiones" label="Comisiones"/><MenuButton id="informes" label="Informes"/><MenuButton id="config" label="Configuración"/><div className="border-t pt-3 mt-3 space-y-2"><p className="text-xs text-zinc-500 break-all">Admin: {session?.user?.email || adminEmail}</p><Btn className="border bg-white w-full" onClick={logout}>Salir del panel</Btn></div></aside><section>{content}</section></div> : ViewCatalog()}</main>{PaymentModal()}{PrintModal()}<footer className="bg-black text-white mt-10 py-6 text-center"><p className="font-bold">BABEL CALZADOS</p><p className="text-sm text-zinc-400">Catálogo digital de productos</p></footer></div>;
 }
